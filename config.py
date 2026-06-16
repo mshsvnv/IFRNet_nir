@@ -1,0 +1,1 @@
+VIMEO_DIR = 'D:/vimeo_triplet'
