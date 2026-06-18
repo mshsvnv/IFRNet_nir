@@ -8,8 +8,9 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from datasets import Vimeo90K_Train_Dataset, Vimeo90K_Test_Dataset
-from metric import calculate_psnr, calculate_ssim, calculate_lpips
+from metric import calculate_psnr, calculate_lpips, calculate_dists
 from utils import AverageMeter
 import logging
 
@@ -30,6 +31,7 @@ def train(args, model):
     os.makedirs(args.log_path, exist_ok=True)
     log_path = os.path.join(args.log_path, time.strftime('%Y-%m-%d_%H-%M-%S', time.localtime()))
     os.makedirs(log_path, exist_ok=True)
+    writer = SummaryWriter(log_dir=os.path.join(log_path, 'tensorboard'))
     logger = logging.getLogger()
     logger.setLevel('INFO')
     BASIC_FORMAT = '%(asctime)s:%(levelname)s:%(message)s'
@@ -76,17 +78,26 @@ def train(args, model):
 
             optimizer.zero_grad()
 
-            # model вместо ddp_model
             imgt_pred, loss_rec, loss_geo, loss_dis = model(img0, img1, embt, imgt, flow)
 
             loss = loss_rec + loss_geo + loss_dis
             loss.backward()
             optimizer.step()
 
-            avg_rec.update(loss_rec.cpu().data)
-            avg_geo.update(loss_geo.cpu().data)
-            avg_dis.update(loss_dis.cpu().data)
+            loss_rec_value = loss_rec.detach().cpu().item()
+            loss_geo_value = loss_geo.detach().cpu().item()
+            loss_dis_value = loss_dis.detach().cpu().item()
+
+            avg_rec.update(loss_rec_value)
+            avg_geo.update(loss_geo_value)
+            avg_dis.update(loss_dis_value)
             train_time_interval = time.time() - time_stamp
+
+            writer.add_scalar('train/lr', lr, iters + 1)
+            writer.add_scalar('train/loss_rec', loss_rec_value, iters + 1)
+            writer.add_scalar('train/loss_geo', loss_geo_value, iters + 1)
+            writer.add_scalar('train/loss_dis', loss_dis_value, iters + 1)
+            writer.add_scalar('train/loss_total', loss_rec_value + loss_geo_value + loss_dis_value, iters + 1)
 
             # Убрано условие local_rank == 0
             if (iters+1) % 100 == 0:
@@ -99,20 +110,24 @@ def train(args, model):
             time_stamp = time.time()
 
         if (epoch+1) % args.eval_interval == 0:
-            psnr = evaluate(args, model, dataloader_val, epoch, logger)
+            psnr = evaluate(args, model, dataloader_val, epoch, logger, writer)
             if psnr > best_psnr:
                 best_psnr = psnr
                 # Сохраняем state_dict напрямую из модели
                 torch.save(model.state_dict(), '{}/{}_{}.pth'.format(log_path, args.model_name, 'best'))
             torch.save(model.state_dict(), '{}/{}_{}.pth'.format(log_path, args.model_name, 'latest'))
 
+    writer.close()
 
-def evaluate(args, model, dataloader_val, epoch, logger):
+
+def evaluate(args, model, dataloader_val, epoch, logger, writer=None):
     loss_rec_list = []
     loss_geo_list = []
     loss_dis_list = []
     psnr_list = []
     lpips_list = []
+    dists_list = []
+    
     time_stamp = time.time()
     for i, data in enumerate(dataloader_val):
         for l in range(len(data)):
@@ -134,18 +149,37 @@ def evaluate(args, model, dataloader_val, epoch, logger):
             lpips_val = calculate_lpips(imgt_pred[j].unsqueeze(0), imgt[j].unsqueeze(0))
             lpips_list.append(lpips_val)
 
+            dists_val = calculate_dists(imgt_pred[j].unsqueeze(0), imgt[j].unsqueeze(0))
+            dists_list.append(dists_val)
+
     eval_time_interval = time.time() - time_stamp
     
-    logger.info('eval epoch:{}/{} time:{:.2f} loss_rec:{:.4e} loss_geo:{:.4e} loss_dis:{:.4e} psnr:{:.3f} lpips:{:.4f}'.format(
-        epoch+1, args.epochs, eval_time_interval, 
-        np.array(loss_rec_list).mean(), 
-        np.array(loss_geo_list).mean(), 
-        np.array(loss_dis_list).mean(), 
-        np.array(psnr_list).mean(), 
-        np.array(lpips_list).mean()
+    loss_rec_mean = float(np.array(loss_rec_list).mean())
+    loss_geo_mean = float(np.array(loss_geo_list).mean())
+    loss_dis_mean = float(np.array(loss_dis_list).mean())
+    psnr_mean = float(np.array(psnr_list).mean())
+    lpips_mean = float(np.array(lpips_list).mean())
+    dists_mean = float(np.array(dists_list).mean())
+
+    logger.info('eval epoch:{}/{} time:{:.2f} loss_rec:{:.4e} loss_geo:{:.4e} loss_dis:{:.4e} psnr:{:.3f} lpips:{:.4f}, dists:{:.4f}'.format(
+        epoch+1, args.epochs, eval_time_interval,
+        loss_rec_mean,
+        loss_geo_mean,
+        loss_dis_mean,
+        psnr_mean,
+        lpips_mean,
+        dists_mean
     ))
 
-    return np.array(psnr_list).mean()
+    if writer is not None:
+        writer.add_scalar('val/loss_rec', loss_rec_mean, epoch + 1)
+        writer.add_scalar('val/loss_geo', loss_geo_mean, epoch + 1)
+        writer.add_scalar('val/loss_dis', loss_dis_mean, epoch + 1)
+        writer.add_scalar('val/psnr', psnr_mean, epoch + 1)
+        writer.add_scalar('val/lpips', lpips_mean, epoch + 1)
+        writer.add_scalar('val/dists', dists_mean, epoch + 1)
+
+    return psnr_mean
 
 
 

@@ -5,7 +5,7 @@ sys.path.append('.')
 import torch
 import numpy as np
 from utils import read
-from metric import calculate_psnr, calculate_ssim, calculate_lpips
+from metric import calculate_dists, calculate_psnr, calculate_ssim, calculate_lpips
 import config
 
 parser = argparse.ArgumentParser(description='IFRNet Evaluation')
@@ -47,6 +47,7 @@ f = open(path + 'tri_testlist.txt', 'r')
 psnr_list = []
 ssim_list = []
 lpips_list = []
+dists_list = []
 
 for i in f:
     name = str(i).strip()
@@ -66,9 +67,17 @@ for i in f:
     psnr = calculate_psnr(I1_pred, I1).detach().cpu().numpy()
     ssim = calculate_ssim(I1_pred, I1).detach().cpu().numpy()
     lpips_val = calculate_lpips(I1_pred, I1)
+    dists_val = calculate_dists(I1_pred, I1)
 
     psnr_list.append(psnr)
     ssim_list.append(ssim)
     lpips_list.append(lpips_val)
+    dists_list.append(dists_val)
     
-    print('Avg PSNR: {:.3f} SSIM: {:.4f}, LPIPS: {:.4f}'.format(np.mean(psnr_list), np.mean(ssim_list), np.mean(lpips_list)))
+    print('Avg PSNR: {:.3f} SSIM: {:.4f}, LPIPS: {:.4f}, DISTS: {:4f}'.format(
+            np.mean(psnr_list), 
+            np.mean(ssim_list), 
+            np.mean(lpips_list),
+            np.mean(dists_list)
+        )
+    )

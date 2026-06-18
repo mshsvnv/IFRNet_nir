@@ -12,7 +12,6 @@ MODELS=("IFRNet" "IFRNet_RGB2")
 for MODEL in "${MODELS[@]}"; do
 
     echo "Starting experiment for: $MODEL"
-
     python train.py --model_name "$MODEL" --epochs 100 --batch_size 2 --lr_start 1e-4 --lr_end 1e-5
 
     echo "  Benchmarking $MODEL..."

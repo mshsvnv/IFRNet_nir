@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import numpy as np
 from math import exp
 import lpips
+import torchvision.models as models
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -151,3 +152,79 @@ def calculate_lpips(img1, img2):
         lpips_value = _lpips_model(img1_norm, img2_norm)
     
     return lpips_value.item()
+
+
+class DISTS(torch.nn.Module):
+    def __init__(self, load_weights=True):
+        super(DISTS, self).__init__()
+        vgg_pretrained_features = models.vgg16(pretrained=load_weights).features
+        self.stage1 = torch.nn.Sequential()
+        self.stage2 = torch.nn.Sequential()
+        self.stage3 = torch.nn.Sequential()
+        self.stage4 = torch.nn.Sequential()
+        self.stage5 = torch.nn.Sequential()
+        
+        for x in range(0, 4):
+            self.stage1.add_module(str(x), vgg_pretrained_features[x])
+        for x in range(4, 9):
+            self.stage2.add_module(str(x), vgg_pretrained_features[x])
+        for x in range(9, 16):
+            self.stage3.add_module(str(x), vgg_pretrained_features[x])
+        for x in range(16, 23):
+            self.stage4.add_module(str(x), vgg_pretrained_features[x])
+        for x in range(23, 30):
+            self.stage5.add_module(str(x), vgg_pretrained_features[x])
+        
+        self.register_buffer("alpha", torch.tensor([0.286, 0.059, 0.228, 0.099, 0.328]))
+        self.register_buffer("beta", torch.tensor([0.331, 0.072, 0.260, 0.099, 0.238]))
+        
+        self.chns = [64, 128, 256, 512, 512]
+
+        for param in self.parameters():
+            param.requires_grad = False
+
+    def forward_once(self, x):
+        h = x
+        h = self.stage1(h)
+        h_relu1_2 = h
+        h = self.stage2(h)
+        h_relu2_2 = h
+        h = self.stage3(h)
+        h_relu3_3 = h
+        h = self.stage4(h)
+        h_relu4_3 = h
+        h = self.stage5(h)
+        h_relu5_3 = h
+        return [h_relu1_2, h_relu2_2, h_relu3_3, h_relu4_3, h_relu5_3]
+
+    def forward(self, x, y):
+        feats_x = self.forward_once(x)
+        feats_y = self.forward_once(y)
+
+        dists_val = 0
+        for k in range(len(feats_x)):
+            x_feat = feats_x[k]
+            y_feat = feats_y[k]
+            
+            mu_x = torch.mean(x_feat, dim=[2, 3], keepdim=True)
+            mu_y = torch.mean(y_feat, dim=[2, 3], keepdim=True)
+            sigma_x = torch.std(x_feat, dim=[2, 3], keepdim=True)
+            sigma_y = torch.std(y_feat, dim=[2, 3], keepdim=True)
+            
+            c1 = 0.01 ** 2
+            s = (2 * mu_x * mu_y + c1) / (mu_x ** 2 + mu_y ** 2 + c1)
+            
+            t = torch.mean(torch.abs(x_feat - y_feat), dim=[2, 3], keepdim=True)
+            
+            dists_val = dists_val + (self.alpha[k] * (1 - s).mean() + self.beta[k] * t.mean())
+
+        return dists_val
+
+_dists_model = DISTS().to(device).eval()
+
+def calculate_dists(img1, img2):
+    
+    with torch.no_grad():
+        dists_value = _dists_model(img1, img2)
+    
+    return dists_value.item()

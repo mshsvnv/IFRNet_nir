@@ -12,6 +12,12 @@ python generate_flow.py
 python train.py --model_name 'IFRNet' --epochs 100 --batch_size 6 --lr_start 1e-4 --lr_end 1e-5
 ```
 
+Во время обучения метрики пишутся в TensorBoard в папку `checkpoint/<model_name>/<timestamp>/tensorboard`.
+Чтобы открыть дашборд, запустите:
+```bash
+tensorboard --logdir checkpoint
+```
+
 ## Бенчмарки для интерполяции 2x
 
 Чтобы проверить время работы и количество параметров модели, запустите:
